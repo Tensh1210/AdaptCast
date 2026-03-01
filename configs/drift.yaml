@@ -1,0 +1,14 @@
+adwin:
+  delta: 0.002
+page_hinkley:
+  min_instances: 30
+  delta: 0.005
+  threshold: 50
+  alpha: 0.9999
+kswin:
+  alpha: 0.005
+  window_size: 100
+  stat_size: 30
+monitor:
+  residual_transform: abs     # |residual| -> ADWIN & PH; raw -> KSWIN
+  evidently_report_every: 500

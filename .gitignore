@@ -1,0 +1,36 @@
+# --- Generated data (reproducible via scripts) ---
+# Exclude contents but keep the .gitkeep so the directory exists after clone
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# --- MLflow artifacts (auto-generated) ---
+mlruns/
+mlflow.db
+
+# --- Python caches ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Notebook checkpoints ---
+.ipynb_checkpoints/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
