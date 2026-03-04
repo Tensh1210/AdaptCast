@@ -102,6 +102,13 @@ class DriftMonitor:
         self._log_to_mlflow(event)
         return event
 
+    def reset(self) -> None:
+        """Reset all detectors and clear row/drift counters."""
+        for det in self._detectors:
+            det.reset()
+        self._row_index = 0
+        self._drift_count = 0
+
     def _log_to_mlflow(self, event: DriftEvent) -> None:
         if self._mlflow_run_id is None:
             return
