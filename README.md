@@ -1,4 +1,4 @@
-# DriftPilot
+# AdaptCast
 
 Adaptive time series forecasting pipeline with concept drift detection, automated retraining, and a live monitoring dashboard.
 
@@ -6,7 +6,7 @@ Adaptive time series forecasting pipeline with concept drift detection, automate
 
 ## Overview
 
-DriftPilot trains a LightGBM baseline on the ETTh1 electricity transformer dataset, streams new observations row-by-row, and uses three statistical drift detectors (ADWIN, Page-Hinkley, KSWIN) to decide when the data distribution has shifted. When drift is detected, an online learner (river's `HoeffdingAdaptiveTreeRegressor`) updates the model incrementally, or a full LightGBM retrain is triggered if the buffer is large enough. The new model is promoted to champion only if it achieves at least 5 % RMSE improvement. All experiments are tracked in a local MLflow server. A FastAPI service exposes predictions, and a Streamlit + Plotly dashboard gives live visibility into drift events, model versions, and forecast accuracy.
+AdaptCast trains a LightGBM baseline on the ETTh1 electricity transformer dataset, streams new observations row-by-row, and uses three statistical drift detectors (ADWIN, Page-Hinkley, KSWIN) to decide when the data distribution has shifted. When drift is detected, an online learner (river's `HoeffdingAdaptiveTreeRegressor`) updates the model incrementally, or a full LightGBM retrain is triggered if the buffer is large enough. The new model is promoted to champion only if it achieves at least 5 % RMSE improvement. All experiments are tracked in a local MLflow server. A FastAPI service exposes predictions, and a Streamlit + Plotly dashboard gives live visibility into drift events, model versions, and forecast accuracy.
 
 ---
 
