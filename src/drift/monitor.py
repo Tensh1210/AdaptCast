@@ -1,6 +1,7 @@
 """Drift monitor: feeds prediction residuals to all detectors and emits DriftEvents."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,15 +66,26 @@ class DriftMonitor:
     def update(self, y_pred: float, y_true: float) -> DriftEvent | None:
         """Feed one prediction/truth pair to all detectors.
 
+        Non-finite values (NaN, inf) are skipped: the row counter advances but
+        no detectors are updated and no DriftEvent is returned.
+
         Args:
             y_pred: Model prediction for this row.
             y_true: Ground-truth target value for this row.
 
         Returns:
             A ``DriftEvent`` if ≥ 1 detector fired, otherwise ``None``.
-            All fired detectors are reset immediately after the event is emitted.
+            Fired detectors are NOT reset automatically — they continue
+            accumulating evidence, allowing detection of sustained drift.
         """
-        residual = float(y_true) - float(y_pred)
+        y_pred = float(y_pred)
+        y_true = float(y_true)
+        self._row_index += 1
+
+        if not (math.isfinite(y_pred) and math.isfinite(y_true)):
+            return None
+
+        residual = y_true - y_pred
         abs_residual = abs(residual)
 
         triggered: list[str] = []
@@ -82,15 +94,8 @@ class DriftMonitor:
             if det.update(value):
                 triggered.append(det.name)
 
-        self._row_index += 1
-
         if not triggered:
             return None
-
-        # Reset every detector that fired
-        for det in self._detectors:
-            if det.name in triggered:
-                det.reset()
 
         self._drift_count += 1
         event = DriftEvent(
@@ -112,10 +117,13 @@ class DriftMonitor:
     def _log_to_mlflow(self, event: DriftEvent) -> None:
         if self._mlflow_run_id is None:
             return
-        with mlflow.start_run(run_id=self._mlflow_run_id):
-            mlflow.log_metric("drift_detected", 1.0, step=event.row_index)
-            mlflow.log_metric(
-                "drift_severity",
-                2.0 if event.severity == "high" else 1.0,
-                step=event.row_index,
-            )
+        try:
+            with mlflow.start_run(run_id=self._mlflow_run_id):
+                mlflow.log_metric("drift_detected", 1.0, step=event.row_index)
+                mlflow.log_metric(
+                    "drift_severity",
+                    2.0 if event.severity == "high" else 1.0,
+                    step=event.row_index,
+                )
+        except Exception as exc:
+            print(f"[monitor] Failed to log drift event to MLflow: {exc}")

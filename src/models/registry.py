@@ -4,6 +4,7 @@ from __future__ import annotations
 import mlflow
 import mlflow.pyfunc
 from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
 
 
 def register_champion(run_id: str, model_name: str) -> None:
@@ -37,9 +38,17 @@ def load_champion(model_name: str) -> mlflow.pyfunc.PyFuncModel:
 
     Returns:
         A loaded ``mlflow.pyfunc.PyFuncModel`` ready for inference.
+
+    Raises:
+        RuntimeError: If the champion alias does not exist or cannot be loaded.
     """
     model_uri = f"models:/{model_name}@champion"
-    model = mlflow.pyfunc.load_model(model_uri)
+    try:
+        model = mlflow.pyfunc.load_model(model_uri)
+    except MlflowException as exc:
+        raise RuntimeError(
+            f"[registry] Failed to load champion model '{model_name}': {exc}"
+        ) from exc
     print(f"[registry] Loaded champion model: {model_name}@champion")
     return model
 
@@ -58,5 +67,5 @@ def get_champion_rmse(model_name: str) -> float | None:
         mv = client.get_model_version_by_alias(name=model_name, alias="champion")
         run = client.get_run(mv.run_id)
         return run.data.metrics.get("val_rmse")
-    except Exception:
+    except (MlflowException, KeyError, AttributeError):
         return None

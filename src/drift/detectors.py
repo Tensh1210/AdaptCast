@@ -12,6 +12,8 @@ from pathlib import Path
 import yaml
 from river.drift import ADWIN, KSWIN, PageHinkley
 
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+
 
 class ADWINDetector:
     """ADWIN — Adaptive Windowing drift detector (Bifet & Gavaldà, 2007).
@@ -92,7 +94,7 @@ class KSWINDetector:
 
 
 def build_detectors(
-    config_path: Path = Path("configs/drift.yaml"),
+    config_path: Path = _PROJECT_ROOT / "configs/drift.yaml",
 ) -> list[ADWINDetector | PageHinkleyDetector | KSWINDetector]:
     """Load drift.yaml and return one initialised instance of each detector.
 

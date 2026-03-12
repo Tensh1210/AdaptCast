@@ -1,10 +1,10 @@
 """Online incremental forecaster wrapping river's HoeffdingAdaptiveTreeRegressor."""
 from __future__ import annotations
 
-import pickle
 import tempfile
 from pathlib import Path
 
+import joblib
 import mlflow.pyfunc
 import numpy as np
 import pandas as pd
@@ -22,18 +22,18 @@ class RiverModelWrapper(mlflow.pyfunc.PythonModel):
     """
 
     def load_context(self, context: mlflow.pyfunc.PythonModelContext) -> None:
-        with open(context.artifacts["river_model"], "rb") as fh:
-            self._river_model = pickle.load(fh)
+        self._river_model = joblib.load(context.artifacts["river_model"])
 
     def predict(
         self,
         context: mlflow.pyfunc.PythonModelContext,
         model_input: pd.DataFrame,
     ) -> np.ndarray:
+        feature_cols = list(model_input.columns)
         return np.array(
             [
-                self._river_model.predict_one(row.to_dict()) or 0.0
-                for _, row in model_input.iterrows()
+                self._river_model.predict_one(dict(zip(feature_cols, row))) or 0.0
+                for row in model_input.itertuples(index=False)
             ]
         )
 
@@ -90,7 +90,10 @@ class OnlineForecaster:
         """
         feature_cols = [c for c in df.columns if c != target_col]
         preds = np.array(
-            [self.predict_one(row.to_dict()) for _, row in df[feature_cols].iterrows()]
+            [
+                self.predict_one(dict(zip(feature_cols, row)))
+                for row in df[feature_cols].itertuples(index=False)
+            ]
         )
         y_true = df[target_col].values
         return {
@@ -104,7 +107,7 @@ class OnlineForecaster:
         experiment_name: str = "driftpilot",
         metrics: dict | None = None,
     ) -> str:
-        """Pickle the river model, log it as an MLflow pyfunc artifact, and return run_id.
+        """Serialize the river model with joblib, log it as an MLflow pyfunc artifact.
 
         Args:
             experiment_name: MLflow experiment to log into.
@@ -115,9 +118,13 @@ class OnlineForecaster:
         """
         mlflow.set_experiment(experiment_name)
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model_path = Path(tmp_dir) / "river_model.pkl"
-            with open(model_path, "wb") as fh:
-                pickle.dump(self._model, fh)
+            model_path = Path(tmp_dir) / "river_model.joblib"
+            try:
+                joblib.dump(self._model, model_path)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"[online] Failed to serialize river model: {exc}"
+                ) from exc
 
             with mlflow.start_run() as run:
                 if metrics:

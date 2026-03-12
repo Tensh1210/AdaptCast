@@ -7,7 +7,8 @@ from typing import Generator
 
 import pandas as pd
 
-TEST_PATH = Path("data/processed/test.parquet")
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+TEST_PATH = _PROJECT_ROOT / "data/processed/test.parquet"
 
 
 def stream_test_data(
@@ -23,9 +24,19 @@ def stream_test_data(
 
     Yields:
         A dict representation of each row (column → value).
+
+    Raises:
+        FileNotFoundError: If the Parquet file does not exist at *path*.
     """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"[stream] Test data not found: {path}. "
+            "Run `python -m src.data.preprocess` first."
+        )
     df = pd.read_parquet(path)
-    for _, row in df.iterrows():
-        yield row.to_dict()
+    cols = list(df.columns)
+    for row in df.itertuples(index=False):
+        yield dict(zip(cols, row))
         if delay_seconds > 0.0:
             time.sleep(delay_seconds)

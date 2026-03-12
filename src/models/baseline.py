@@ -13,10 +13,13 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
 
 TARGET_COL = "OT"
-CONFIG_PATH = Path("configs/model.yaml")
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+CONFIG_PATH = _PROJECT_ROOT / "configs/model.yaml"
 
 
 def _load_config(config_path: Path) -> dict:
+    if not config_path.exists():
+        raise FileNotFoundError(f"[baseline] Config not found: {config_path}")
     with open(config_path) as fh:
         return yaml.safe_load(fh)
 
@@ -97,12 +100,15 @@ def train_baseline(
         mlflow.log_metric("cv_rmse", cv_rmse)
         print(f"[baseline] CV RMSE (mean over {cv_splits} folds): {cv_rmse:.4f}")
 
-        # Final fit on the full training set
+        # Final fit on the full training set with early stopping on the validation set
         dtrain_full = lgb.Dataset(X_train, label=y_train)
+        dval_full = lgb.Dataset(X_val, label=y_val, reference=dtrain_full)
         model = lgb.train(
             {**lgbm_params, "verbosity": -1},
             dtrain_full,
             num_boost_round=lgbm_params["n_estimators"],
+            valid_sets=[dval_full],
+            callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(-1)],
         )
 
         # Evaluate on validation set
@@ -125,7 +131,15 @@ def train_baseline(
 if __name__ == "__main__":
     from src.data.download import download_data
     from src.data.preprocess import run_preprocessing
+    from src.models.registry import register_champion
+
+    with open(_PROJECT_ROOT / "configs/serving.yaml") as fh:
+        serving_cfg = yaml.safe_load(fh)
+
+    mlflow.set_tracking_uri(serving_cfg["mlflow"]["tracking_uri"])
+    model_name = serving_cfg["mlflow"]["model_name"]
 
     download_data()
     train_df, val_df, _ = run_preprocessing()
-    train_baseline(train_df, val_df)
+    _, run_id = train_baseline(train_df, val_df)
+    register_champion(run_id, model_name)

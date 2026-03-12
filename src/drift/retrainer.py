@@ -15,7 +15,8 @@ from src.models.online import OnlineForecaster
 from src.models.registry import get_champion_rmse, register_champion
 
 TARGET_COL = "OT"
-MODEL_CONFIG = Path("configs/model.yaml")
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+MODEL_CONFIG = _PROJECT_ROOT / "configs/model.yaml"
 
 
 @dataclass
@@ -46,8 +47,14 @@ class DriftRetrainer:
 
     Promotion gate: ``challenger_rmse < champion_rmse × 0.95`` (5 % improvement).
 
+    The validation set used for champion/challenger comparison starts as the last
+    ``val_window_size`` rows of the provided ``val_df``.  Once the buffer contains
+    enough data (> 2 × val_window_size rows), evaluation automatically shifts to a
+    rolling window drawn from the most recent buffer rows, keeping the gate aligned
+    with the current data distribution.
+
     Args:
-        val_df: Validation DataFrame used for both champion and challenger evaluation.
+        val_df: Initial validation DataFrame (features + target).
             Sliced to the last ``val_window_size`` rows at construction time.
         model_name: Registered model name in the MLflow Model Registry.
         config_path: Path to ``configs/model.yaml``.
@@ -65,11 +72,11 @@ class DriftRetrainer:
             cfg = yaml.safe_load(fh)
 
         retrain_window = cfg["training"]["retrain_window_size"]
-        val_window = cfg["training"]["val_window_size"]
+        self._val_window = cfg["training"]["val_window_size"]
 
         self._model_name = model_name
         self._experiment_name = experiment_name
-        self._val_df = val_df.iloc[-val_window:]
+        self._static_val_df = val_df.iloc[-self._val_window:]
         self._buffer: deque[dict] = deque(maxlen=retrain_window)
         self._online: OnlineForecaster | None = None
 
@@ -108,12 +115,37 @@ class DriftRetrainer:
         rmse = get_champion_rmse(self._model_name)
         return rmse if rmse is not None else float("inf")
 
+    def _get_current_val_df(self) -> pd.DataFrame:
+        """Return a rolling validation window aligned to the current data distribution.
+
+        If the buffer has more than 2 × val_window rows, the most recent
+        val_window rows are used so that the promotion gate reflects recent
+        behaviour rather than the (potentially stale) initial validation set.
+        Falls back to the static validation set when the buffer is too small.
+        """
+        if len(self._buffer) > self._val_window * 2:
+            recent = pd.DataFrame(list(self._buffer)).iloc[-self._val_window:]
+            for col in recent.columns:
+                recent[col] = pd.to_numeric(recent[col], errors="coerce")
+            recent = recent.dropna()
+            if len(recent) >= self._val_window // 2:
+                return recent
+        return self._static_val_df
+
     def _online_update(self) -> PromotionResult:
         """Mode A: incremental HoeffdingAdaptiveTree update on buffered rows."""
         if self._online is None:
             self._online = OnlineForecaster()
 
-        feature_cols = [c for c in self._val_df.columns if c != TARGET_COL]
+        grace_period = self._online._params["grace_period"]
+        if len(self._buffer) < grace_period:
+            print(
+                f"[retrainer] Mode A — buffer has {len(self._buffer)} rows, "
+                f"less than grace_period={grace_period}; predictions may be naive."
+            )
+
+        val_df = self._get_current_val_df()
+        feature_cols = [c for c in val_df.columns if c != TARGET_COL]
 
         # Learn on every buffered row
         for row in self._buffer:
@@ -121,7 +153,7 @@ class DriftRetrainer:
             y = row[TARGET_COL]
             self._online.learn_one(x, y)
 
-        challenger_rmse = self._online.evaluate_on_df(self._val_df)["rmse"]
+        challenger_rmse = self._online.evaluate_on_df(val_df)["rmse"]
         champion_rmse = self._get_champion_rmse()
         promoted = False
         run_id: str | None = None
@@ -166,9 +198,16 @@ class DriftRetrainer:
         buffer_df = pd.DataFrame(list(self._buffer))
 
         # Ensure column types are numeric (dicts from stream may carry mixed types)
+        initial_rows = len(buffer_df)
         for col in buffer_df.columns:
             buffer_df[col] = pd.to_numeric(buffer_df[col], errors="coerce")
         buffer_df = buffer_df.dropna()
+        rows_dropped = initial_rows - len(buffer_df)
+        if rows_dropped > 0:
+            print(
+                f"[retrainer] Mode B — dropped {rows_dropped}/{initial_rows} rows "
+                "after numeric type coercion."
+            )
 
         if buffer_df.empty:
             print("[retrainer] Mode B — buffer produced empty DataFrame after dropna.")
@@ -180,9 +219,18 @@ class DriftRetrainer:
                 mode="full_retrain",
             )
 
+        val_df = self._get_current_val_df()
+
+        # When using the rolling buffer val, exclude those rows from training
+        # to avoid data leakage between train and validation sets.
+        if val_df is not self._static_val_df and len(buffer_df) > len(val_df):
+            train_df = buffer_df.iloc[: -len(val_df)]
+        else:
+            train_df = buffer_df
+
         model, run_id = train_baseline(
-            train_df=buffer_df,
-            val_df=self._val_df,
+            train_df=train_df,
+            val_df=val_df,
             experiment_name=self._experiment_name,
         )
 

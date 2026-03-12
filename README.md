@@ -17,9 +17,9 @@ ETTh1.csv
     │
     ▼
 src/data/preprocess.py   ←── lag features (1,24,168), rolling stats, train/val/test split
-    │
+    │                         (feature config loaded from configs/model.yaml)
     ▼
-src/models/baseline.py   ←── LightGBM train + time-series CV + MLflow logging
+src/models/baseline.py   ←── LightGBM train + time-series CV + early stopping + MLflow logging
     │
     ▼  champion alias
 src/models/registry.py   ←── MLflow model registry  ──────────────────────────┐
@@ -29,10 +29,10 @@ src/data/stream.py                                                              
     │                                                                           │
     ▼  residuals                                                                │
 src/drift/monitor.py     ←── ADWIN │ Page-Hinkley │ KSWIN                     │
-    │  DriftEvent                                                               │
+    │  DriftEvent (detectors accumulate continuously — no auto-reset)           │
     ▼                                                                           │
 src/drift/retrainer.py   ←── online update (river) or full retrain ────────────┘
-    │
+    │                         (rolling validation window keeps gate current)
     ▼
 src/serving/app.py       ←── FastAPI  (uvicorn, port 8000)
     │
@@ -76,8 +76,8 @@ Or use the Makefile shortcuts:
 make install
 make data
 make train
-make mlflow   # terminal 1
-make serve    # terminal 2
+make mlflow     # terminal 1
+make serve      # terminal 2
 make dashboard  # terminal 3
 ```
 
@@ -113,22 +113,38 @@ pytest -v
 ```
 AdaptCast/
 ├── configs/
-│   ├── drift.yaml          # detector thresholds
-│   ├── model.yaml          # LightGBM hyperparameters
-│   └── serving.yaml        # API port, MLflow URI, dashboard refresh
+│   ├── drift.yaml          # detector thresholds (delta, alpha, window sizes)
+│   ├── model.yaml          # LightGBM hyperparameters + feature config (lags, windows, target)
+│   └── serving.yaml        # API port, MLflow URI, dashboard refresh interval
 ├── data/
-│   ├── raw/ETTh1.csv
+│   ├── raw/ETTh1.csv       # downloaded source data (write-once)
 │   └── processed/          # train/val/test parquet files
 ├── src/
 │   ├── data/               # download, preprocess, stream
 │   ├── drift/              # detectors, monitor, retrainer
 │   ├── models/             # baseline (LightGBM), online (river), registry
 │   ├── serving/            # FastAPI app, routes, schemas
-│   └── dashboard/          # Streamlit app + components
+│   └── dashboard/          # Streamlit app + Plotly components
 ├── tests/                  # 25 pytest tests
 ├── notebooks/              # EDA, feature engineering, drift simulation
-├── AGENT/                  # project docs (phases, decisions, concepts)
+├── AGENT/                  # project docs (phases, decisions, concepts, tech stack)
 ├── pyproject.toml
 ├── Makefile
 └── README.md
 ```
+
+---
+
+## Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Baseline model | LightGBM | Trains in seconds; matches LSTM on ~17 k tabular rows |
+| Online model | river `HoeffdingAdaptiveTreeRegressor` | Purpose-built for streaming; same library as detectors |
+| Drift detectors | ADWIN + Page-Hinkley + KSWIN | Complementary: window, cumsum, non-parametric |
+| Experiment tracking | MLflow (local) | No cloud account required; built-in model registry |
+| Model serialization | joblib | Safer than pickle; no arbitrary code execution on load |
+| Serving | FastAPI + uvicorn | Native async; auto OpenAPI docs; Pydantic v2 |
+| Dashboard | Streamlit + Plotly | Zero JavaScript; interactive charts; rapid iteration |
+
+See `AGENT/DECISIONS.md` for full architectural decision records.

@@ -4,30 +4,39 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
-RAW_PATH = Path("data/raw/ETTh1.csv")
-PROCESSED_DIR = Path("data/processed")
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+RAW_PATH = _PROJECT_ROOT / "data/raw/ETTh1.csv"
+PROCESSED_DIR = _PROJECT_ROOT / "data/processed"
+_CONFIG_PATH = _PROJECT_ROOT / "configs/model.yaml"
 
+# Module-level defaults (overridden at runtime from configs/model.yaml)
 LAGS = [1, 24, 168]
 ROLLING_WINDOWS = [24, 168]
 TARGET_COL = "OT"
 
 
-def _engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+def _engineer_features(
+    df: pd.DataFrame,
+    lags: list[int] = LAGS,
+    rolling_windows: list[int] = ROLLING_WINDOWS,
+    target_col: str = TARGET_COL,
+) -> pd.DataFrame:
     """Add lag, rolling, and calendar features; drop NaN rows introduced by lag-168."""
     df = df.copy()
 
     # Lag features
-    for lag in LAGS:
-        df[f"{TARGET_COL}_lag_{lag}"] = df[TARGET_COL].shift(lag)
+    for lag in lags:
+        df[f"{target_col}_lag_{lag}"] = df[target_col].shift(lag)
 
-    # Rolling mean and std
-    for window in ROLLING_WINDOWS:
-        df[f"{TARGET_COL}_roll_mean_{window}"] = (
-            df[TARGET_COL].shift(1).rolling(window).mean()
+    # Rolling mean and std (shift(1) prevents look-ahead leakage)
+    for window in rolling_windows:
+        df[f"{target_col}_roll_mean_{window}"] = (
+            df[target_col].shift(1).rolling(window).mean()
         )
-        df[f"{TARGET_COL}_roll_std_{window}"] = (
-            df[TARGET_COL].shift(1).rolling(window).std()
+        df[f"{target_col}_roll_std_{window}"] = (
+            df[target_col].shift(1).rolling(window).std()
         )
 
     # Calendar features (LightGBM handles ordinal encoding natively)
@@ -35,9 +44,14 @@ def _engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df["dayofweek"] = df.index.dayofweek
     df["month"] = df.index.month
 
-    # Drop the first 168 rows where lag-168 is NaN
-    df = df.iloc[168:].copy()
+    # Drop the first max(lags) rows where the longest lag is NaN
+    df = df.iloc[max(lags):].copy()
+
+    rows_before = len(df)
     df = df.dropna()
+    rows_dropped = rows_before - len(df)
+    if rows_dropped > 0:
+        print(f"[preprocess] Dropped {rows_dropped} additional rows with NaN after feature engineering.")
 
     return df
 
@@ -62,19 +76,44 @@ def _chronological_split(
 def run_preprocessing(
     raw_path: Path = RAW_PATH,
     out_dir: Path = PROCESSED_DIR,
+    config_path: Path = _CONFIG_PATH,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Load raw CSV, engineer features, split, and save Parquet files.
 
     Returns:
         (train_df, val_df, test_df) — DataFrames with features and target.
     """
+    raw_path = Path(raw_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(raw_path, parse_dates=["date"], index_col="date")
+    # Load feature config; fall back to module defaults if config is unavailable
+    lags, rolling_windows, target_col = LAGS, ROLLING_WINDOWS, TARGET_COL
+    if Path(config_path).exists():
+        with open(config_path) as fh:
+            cfg = yaml.safe_load(fh)
+        feat = cfg.get("features", {})
+        lags = feat.get("lags", LAGS)
+        rolling_windows = feat.get("rolling_windows", ROLLING_WINDOWS)
+        target_col = feat.get("target_col", TARGET_COL)
+
+    try:
+        df = pd.read_csv(raw_path, parse_dates=["date"], index_col="date")
+    except (KeyError, ValueError) as exc:
+        raise ValueError(
+            f"[preprocess] Failed to parse {raw_path}: {exc}. "
+            "Ensure the CSV has a 'date' column."
+        ) from exc
+
+    if target_col not in df.columns:
+        raise ValueError(
+            f"[preprocess] Target column '{target_col}' not found in {raw_path}. "
+            f"Available columns: {list(df.columns)}"
+        )
+
     df = df.sort_index()
 
-    df = _engineer_features(df)
+    df = _engineer_features(df, lags=lags, rolling_windows=rolling_windows, target_col=target_col)
 
     train_df, val_df, test_df = _chronological_split(df)
 
