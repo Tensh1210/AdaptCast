@@ -39,7 +39,7 @@ def render_model_timeline(runs: list[dict], model_versions: list[dict]) -> None:
         ]
     )
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
     caption = f"Showing {len(runs)} run(s)."
     if champion_run_id:
         caption += f" Champion: {champion_run_id}."

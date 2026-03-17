@@ -49,7 +49,7 @@ def render_drift_gauge(drift_status: dict) -> None:
         )
     )
     fig.update_layout(height=240, margin=dict(l=20, r=20, t=40, b=10))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # Summary metrics
     col_a, col_b = st.columns(2)

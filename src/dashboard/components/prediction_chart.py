@@ -80,4 +80,4 @@ def render_prediction_chart(
     fig.update_xaxes(showgrid=True, gridcolor="#eeeeee")
     fig.update_yaxes(showgrid=True, gridcolor="#eeeeee")
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")

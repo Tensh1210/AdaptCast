@@ -6,6 +6,7 @@ Run with:
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
 import httpx
@@ -32,19 +33,25 @@ from src.dashboard.components.prediction_chart import render_prediction_chart
 
 st.set_page_config(page_title="AdaptCast", layout="wide")
 
+# ---------------------------------------------------------------------------
+# Fetch all data once per script run
+# ---------------------------------------------------------------------------
+
+health = fetch_health()
+stream_status = fetch_stream_status()
+drift_status = fetch_drift_status()
+runs = fetch_mlflow_runs()
+history = fetch_prediction_history()
+model_versions = fetch_model_versions()
+
+api_ok = health.get("status") == "ok"
+stream_running: bool = stream_status.get("running", False)
 
 # ---------------------------------------------------------------------------
-# Sidebar fragment — must be called inside `with st.sidebar:`
+# Sidebar
 # ---------------------------------------------------------------------------
 
-@st.fragment(run_every=1)
-def sidebar_content() -> None:
-    health = fetch_health()
-    stream_status = fetch_stream_status()
-    model_versions = fetch_model_versions()
-
-    api_ok = health.get("status") == "ok"
-
+with st.sidebar:
     st.title("AdaptCast")
     st.markdown("---")
 
@@ -76,7 +83,6 @@ def sidebar_content() -> None:
 
     # --- Stream control ---
     st.subheader("Stream Control")
-    stream_running: bool = stream_status.get("running", False)
     rows_processed: int = stream_status.get("rows_processed", 0)
     total_rows: int = stream_status.get("total_rows", 0)
 
@@ -90,7 +96,7 @@ def sidebar_content() -> None:
             except httpx.RequestError:
                 st.error("Could not reach API.")
             st.cache_data.clear()
-            st.rerun(scope="app")
+            st.rerun()
     else:
         if rows_processed > 0 and rows_processed >= total_rows > 0:
             st.success(f"Stream complete ({rows_processed:,} rows).")
@@ -107,7 +113,7 @@ def sidebar_content() -> None:
             except httpx.RequestError:
                 st.error("Could not reach API.")
             st.cache_data.clear()
-            st.rerun(scope="app")
+            st.rerun()
 
     st.markdown("---")
 
@@ -119,7 +125,7 @@ def sidebar_content() -> None:
         except httpx.RequestError:
             st.error("Could not reach API.")
         st.cache_data.clear()
-        st.rerun(scope="app")
+        st.rerun()
 
     st.markdown("---")
 
@@ -152,7 +158,7 @@ def sidebar_content() -> None:
                 except httpx.RequestError:
                     st.error("Could not reach API.")
                 st.cache_data.clear()
-                st.rerun(scope="app")
+                st.rerun()
         else:
             st.caption("Already champion.")
     else:
@@ -162,52 +168,47 @@ def sidebar_content() -> None:
     st.caption(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
     if st.button("Refresh now"):
         st.cache_data.clear()
-        st.rerun(scope="app")
-    st.caption(f"Auto-refresh every {REFRESH_INTERVAL}s")
+        st.rerun()
 
-
-# ---------------------------------------------------------------------------
-# Main content fragment
-# ---------------------------------------------------------------------------
-
-@st.fragment(run_every=1)
-def main_content() -> None:
-    drift_status = fetch_drift_status()
-    runs = fetch_mlflow_runs()
-    history = fetch_prediction_history()
-    model_versions = fetch_model_versions()
-
-    st.title("AdaptCast — Live Monitoring Dashboard")
-
-    # Row 1: Drift status + Actual vs Predicted
-    col1, col2 = st.columns([1, 2])
-
-    with col1:
-        st.subheader("Drift Status")
-        render_drift_gauge(drift_status)
-
-    with col2:
-        st.subheader("Actual vs Predicted")
-        render_prediction_chart(history, drift_status)
-
-    st.markdown("---")
-
-    # Row 2: RMSE history
-    st.subheader("RMSE History")
-    render_forecast_chart(runs, model_versions)
-
-    st.markdown("---")
-
-    # Row 3: Model run timeline
-    st.subheader("Model Run Timeline")
-    render_model_timeline(runs, model_versions)
-
+    if stream_running:
+        st.caption(f"Auto-refresh every {REFRESH_INTERVAL}s")
+    else:
+        st.caption("Auto-refresh paused (stream idle).")
 
 # ---------------------------------------------------------------------------
-# Layout — sidebar fragment must be invoked inside the sidebar context
+# Main content
 # ---------------------------------------------------------------------------
 
-with st.sidebar:
-    sidebar_content()
+st.title("AdaptCast — Live Monitoring Dashboard")
 
-main_content()
+# Row 1: Drift status + Actual vs Predicted
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    st.subheader("Drift Status")
+    render_drift_gauge(drift_status)
+
+with col2:
+    st.subheader("Actual vs Predicted")
+    render_prediction_chart(history, drift_status)
+
+st.markdown("---")
+
+# Row 2: RMSE history
+st.subheader("RMSE History")
+render_forecast_chart(runs, model_versions)
+
+st.markdown("---")
+
+# Row 3: Model run timeline
+st.subheader("Model Run Timeline")
+render_model_timeline(runs, model_versions)
+
+# ---------------------------------------------------------------------------
+# Auto-refresh: only when stream is actively running
+# ---------------------------------------------------------------------------
+
+if stream_running:
+    time.sleep(REFRESH_INTERVAL)
+    st.cache_data.clear()
+    st.rerun()
