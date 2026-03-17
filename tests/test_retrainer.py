@@ -51,11 +51,13 @@ def synthetic_val_df() -> pd.DataFrame:
 
 @pytest.fixture(scope="module")
 def retrainer(synthetic_val_df, mlflow_uri) -> DriftRetrainer:
-    return DriftRetrainer(
-        val_df=synthetic_val_df,
-        model_name="test-driftpilot-forecaster",
-        experiment_name="test-retrainer",
-    )
+    with patch("src.drift.retrainer.load_champion") as mock_load:
+        mock_load.return_value = MagicMock()
+        return DriftRetrainer(
+            val_df=synthetic_val_df,
+            model_name="test-driftpilot-forecaster",
+            experiment_name="test-retrainer",
+        )
 
 
 def _make_event(severity_detectors: list[str]) -> DriftEvent:

@@ -1,7 +1,8 @@
-"""Async integration tests for the DriftPilot FastAPI service."""
+"""Async integration tests for the AdaptCast FastAPI service."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from collections import deque
+from unittest.mock import MagicMock
 
 import httpx
 import numpy as np
@@ -34,7 +35,20 @@ def mock_retrainer():
 
 
 @pytest.fixture
-async def client(mock_model, mock_monitor, mock_retrainer):
+def mock_mlflow_client():
+    m = MagicMock()
+    mock_mv = MagicMock()
+    mock_mv.version = "3"
+    mock_mv.run_id = "abc12345"
+    mock_run = MagicMock()
+    mock_run.data.metrics = {"val_rmse": 0.123}
+    m.get_model_version_by_alias.return_value = mock_mv
+    m.get_run.return_value = mock_run
+    return m
+
+
+@pytest.fixture
+async def client(mock_model, mock_monitor, mock_retrainer, mock_mlflow_client):
     app = create_app()
     # httpx.ASGITransport does not trigger ASGI lifespan events, so inject
     # mock state directly instead of relying on the lifespan context.
@@ -42,6 +56,15 @@ async def client(mock_model, mock_monitor, mock_retrainer):
     app.state.monitor = mock_monitor
     app.state.retrainer = mock_retrainer
     app.state.model_name = "test-model"
+    app.state.experiment_name = "test-experiment"
+    app.state.mlflow_client = mock_mlflow_client
+    app.state.prediction_history = deque(maxlen=500)
+    app.state.last_drift_event = None
+    app.state.stream_running = False
+    app.state.stream_task = None
+    app.state.stream_total_rows = 0
+    import asyncio
+    app.state.model_lock = asyncio.Lock()
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
@@ -76,18 +99,7 @@ async def test_predict_with_y_true(client, mock_monitor, mock_retrainer):
 
 
 async def test_model_info(client):
-    mock_mv = MagicMock()
-    mock_mv.version = "3"
-    mock_mv.run_id = "abc123"
-    mock_run = MagicMock()
-    mock_run.data.metrics = {"val_rmse": 0.123}
-
-    with patch("src.serving.routes.MlflowClient") as mock_client_cls:
-        mock_client_cls.return_value.get_model_version_by_alias.return_value = mock_mv
-        mock_client_cls.return_value.get_run.return_value = mock_run
-
-        resp = await client.get("/model/info")
-
+    resp = await client.get("/model/info")
     assert resp.status_code == 200
     data = resp.json()
     assert data["name"] == "test-model"
@@ -100,6 +112,7 @@ async def test_drift_status(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["row_index"] == 0
+    assert data["last_drift_row"] is None
     assert any(d["name"] == "ADWIN" for d in data["detectors"])
 
 
