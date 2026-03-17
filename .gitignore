@@ -1,9 +1,6 @@
 # --- Generated data (reproducible via scripts) ---
 # Exclude contents but keep the .gitkeep so the directory exists after clone
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
+data/
 
 # --- MLflow artifacts (auto-generated) ---
 mlruns/
@@ -27,6 +24,10 @@ env/
 
 # --- Notebook checkpoints ---
 .ipynb_checkpoints/
+
+# --- Claude / Agent docs (local only) ---
+.claude/
+AGENT/
 
 # --- Editor / OS ---
 .vscode/
