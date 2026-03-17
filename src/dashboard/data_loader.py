@@ -1,8 +1,8 @@
-"""Centralised data-fetching layer for the DriftPilot dashboard.
+"""Centralised data-fetching layer for the AdaptCast dashboard.
 
 All external calls live here so components stay pure presentation logic.
 Each function is cached with ``@st.cache_data(ttl=...)`` and returns a safe
-fallback value when FastAPI or MLflow is unreachable.
+fallback value when FastAPI is unreachable.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from typing import Any
 import httpx
 import streamlit as st
 import yaml
-from mlflow.tracking import MlflowClient
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +33,8 @@ def load_config() -> dict:
 _cfg = load_config()
 _PORT = _cfg["api"]["port"]
 BASE_URL = f"http://localhost:{_PORT}"
-_MLFLOW_URI = _cfg["mlflow"]["tracking_uri"]
-_EXPERIMENT = _cfg["mlflow"]["experiment_name"]
 _REFRESH = _cfg["dashboard"]["refresh_interval_seconds"]
+REFRESH_INTERVAL: int = _REFRESH
 
 # ---------------------------------------------------------------------------
 # Public fetch functions
@@ -50,7 +48,7 @@ def fetch_health() -> dict:
         resp = httpx.get(f"{BASE_URL}/health", timeout=3.0)
         resp.raise_for_status()
         return resp.json()
-    except Exception as exc:
+    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
         logger.warning("fetch_health failed: %s", exc)
         return {"status": "unreachable", "model_loaded": False}
 
@@ -62,69 +60,59 @@ def fetch_drift_status() -> dict:
         resp = httpx.get(f"{BASE_URL}/drift/status", timeout=3.0)
         resp.raise_for_status()
         return resp.json()
-    except Exception as exc:
+    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
         logger.warning("fetch_drift_status failed: %s", exc)
         return {
-            "drift_detected": False,
             "drift_count": 0,
             "row_index": 0,
-            "detectors": {},
+            "last_drift_row": None,
+            "detectors": [],
         }
 
 
 @st.cache_data(ttl=_REFRESH)
-def fetch_model_info() -> dict | None:
-    """GET /model/info — returns model metadata dict or None when unavailable."""
+def fetch_model_versions() -> list[dict]:
+    """GET /model/versions — returns all registered model versions."""
     try:
-        resp = httpx.get(f"{BASE_URL}/model/info", timeout=3.0)
+        resp = httpx.get(f"{BASE_URL}/model/versions", timeout=3.0)
+        resp.raise_for_status()
+        return resp.json().get("versions", [])
+    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+        logger.warning("fetch_model_versions failed: %s", exc)
+        return []
+
+
+@st.cache_data(ttl=1)
+def fetch_stream_status() -> dict:
+    """GET /stream/status — returns stream running state and progress (TTL=1s)."""
+    try:
+        resp = httpx.get(f"{BASE_URL}/stream/status", timeout=3.0)
         resp.raise_for_status()
         return resp.json()
-    except Exception as exc:
-        logger.warning("fetch_model_info failed: %s", exc)
-        return None
+    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+        logger.warning("fetch_stream_status failed: %s", exc)
+        return {"running": False, "rows_processed": 0, "total_rows": 0}
+
+
+@st.cache_data(ttl=_REFRESH)
+def fetch_prediction_history() -> list[dict]:
+    """GET /predictions/history — returns recent prediction/actual pairs."""
+    try:
+        resp = httpx.get(f"{BASE_URL}/predictions/history", timeout=3.0)
+        resp.raise_for_status()
+        return resp.json().get("points", [])
+    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+        logger.warning("fetch_prediction_history failed: %s", exc)
+        return []
 
 
 @st.cache_data(ttl=_REFRESH)
 def fetch_mlflow_runs() -> list[dict[str, Any]]:
-    """Query MLflow for all runs in the experiment, sorted oldest → newest.
-
-    Each dict contains:
-        run_id    – first 8 characters of the MLflow run ID
-        start_time – ISO 8601 string (UTC)
-        val_rmse  – float or None
-        status    – MLflow run status string
-    """
+    """GET /mlflow/runs — fetch all MLflow run history via the API."""
     try:
-        client = MlflowClient(tracking_uri=_MLFLOW_URI)
-        experiments = client.search_experiments(filter_string=f"name = '{_EXPERIMENT}'")
-        if not experiments:
-            return []
-        exp_id = experiments[0].experiment_id
-        mlflow_runs = client.search_runs(
-            experiment_ids=[exp_id],
-            order_by=["start_time ASC"],
-        )
-        runs: list[dict[str, Any]] = []
-        for r in mlflow_runs:
-            val_rmse = r.data.metrics.get("val_rmse") or r.data.metrics.get("rmse")
-            start_ms = r.info.start_time  # epoch milliseconds
-            import datetime
-            start_iso = (
-                datetime.datetime.utcfromtimestamp(start_ms / 1000).isoformat()
-                if start_ms
-                else ""
-            )
-            runs.append(
-                {
-                    "run_id": r.info.run_id[:8],
-                    "start_time": start_iso,
-                    "val_rmse": val_rmse,
-                    "status": r.info.status,
-                }
-            )
-        # Already ordered ASC by MLflow query, but re-sort defensively
-        runs.sort(key=lambda x: x["start_time"])
-        return runs
-    except Exception as exc:
+        resp = httpx.get(f"{BASE_URL}/mlflow/runs", timeout=3.0)
+        resp.raise_for_status()
+        return resp.json().get("runs", [])
+    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
         logger.warning("fetch_mlflow_runs failed: %s", exc)
         return []

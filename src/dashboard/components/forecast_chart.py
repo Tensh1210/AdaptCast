@@ -7,14 +7,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-def render_forecast_chart(runs: list[dict]) -> None:
+def render_forecast_chart(runs: list[dict], model_versions: list[dict]) -> None:
     """Render a Plotly line chart of val_rmse across MLflow runs.
 
     Args:
         runs: List of run dicts from ``fetch_mlflow_runs()``.
               Each dict has keys: run_id, start_time, val_rmse, status.
+        model_versions: List of version dicts from ``fetch_model_versions()``.
+                        Used to identify the true champion run.
     """
-    # Filter to runs that have a val_rmse metric
     valid = [r for r in runs if r.get("val_rmse") is not None]
 
     if not valid:
@@ -24,7 +25,6 @@ def render_forecast_chart(runs: list[dict]) -> None:
     df = pd.DataFrame(valid).reset_index(drop=True)
     df["run_index"] = range(1, len(df) + 1)
 
-    # X-tick labels: "Run 1", "Run 2", …
     x_labels = [f"Run {i}" for i in df["run_index"]]
 
     fig = go.Figure()
@@ -37,19 +37,24 @@ def render_forecast_chart(runs: list[dict]) -> None:
             name="val_rmse",
             line=dict(color="#4C72B0", width=2),
             marker=dict(size=8),
-            hovertemplate=(
-                "<b>%{text}</b><br>RMSE: %{y:.4f}<extra></extra>"
-            ),
+            hovertemplate="<b>%{text}</b><br>RMSE: %{y:.4f}<extra></extra>",
             text=[f"{label} ({rid})" for label, rid in zip(x_labels, df["run_id"])],
         )
     )
 
-    # Annotate the last (current champion) point
-    last = df.iloc[-1]
+    # Find champion run_id from model_versions; fall back to last run
+    champion_run_id = next(
+        (v.get("run_id") for v in model_versions if v.get("is_champion")),
+        None,
+    )
+    champion_mask = df["run_id"] == champion_run_id if champion_run_id else pd.Series(False, index=df.index)
+    champion_rows = df[champion_mask]
+    champ = champion_rows.iloc[0] if not champion_rows.empty else df.iloc[-1]
+
     fig.add_annotation(
-        x=last["run_index"],
-        y=last["val_rmse"],
-        text="Current champion",
+        x=champ["run_index"],
+        y=champ["val_rmse"],
+        text="Champion",
         showarrow=True,
         arrowhead=2,
         ax=40,

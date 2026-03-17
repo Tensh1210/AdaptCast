@@ -1,4 +1,4 @@
-"""Drift count gauge + alert banner component."""
+"""Drift count gauge + alert banner + per-detector status component."""
 
 from __future__ import annotations
 
@@ -7,24 +7,24 @@ import streamlit as st
 
 
 def render_drift_gauge(drift_status: dict) -> None:
-    """Render a Plotly gauge for drift_count and summary metrics.
+    """Render a Plotly gauge for drift_count, summary metrics, and detector status.
 
     Args:
         drift_status: Dict from ``fetch_drift_status()``.
-                      Expected keys: drift_count, row_index, drift_detected.
+                      Expected keys: drift_count, row_index, last_drift_row, detectors.
     """
     drift_count: int = drift_status.get("drift_count", 0)
     row_index: int = drift_status.get("row_index", 0)
+    last_drift_row: int | None = drift_status.get("last_drift_row")
+    detectors: list[dict] = drift_status.get("detectors", [])
 
     # Alert banner
     if drift_count > 0:
-        st.warning(
-            f"**Drift detected!** {drift_count} drift event(s) recorded so far."
-        )
+        st.warning(f"**Drift detected!** {drift_count} event(s) recorded.")
     else:
         st.success("No drift detected.")
 
-    # Gauge axis max: at least 10, or 2× drift_count when that's larger
+    # Gauge — axis max: at least 10, or 2× drift_count when larger
     axis_max = max(10, drift_count * 2)
 
     fig = go.Figure(
@@ -36,9 +36,9 @@ def render_drift_gauge(drift_status: dict) -> None:
                 "axis": {"range": [0, axis_max], "tickwidth": 1},
                 "bar": {"color": "#1f77b4"},
                 "steps": [
-                    {"range": [0, 2], "color": "#2ca02c"},       # green
-                    {"range": [2, 10], "color": "#ff7f0e"},      # amber
-                    {"range": [10, axis_max], "color": "#d62728"},  # red
+                    {"range": [0, 2], "color": "#2ca02c"},
+                    {"range": [2, 10], "color": "#ff7f0e"},
+                    {"range": [10, axis_max], "color": "#d62728"},
                 ],
                 "threshold": {
                     "line": {"color": "black", "width": 3},
@@ -48,10 +48,25 @@ def render_drift_gauge(drift_status: dict) -> None:
             },
         )
     )
-    fig.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=20))
+    fig.update_layout(height=240, margin=dict(l=20, r=20, t=40, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
     # Summary metrics
     col_a, col_b = st.columns(2)
     col_a.metric("Rows Processed", f"{row_index:,}")
     col_b.metric("Drift Events", drift_count)
+
+    if last_drift_row is not None:
+        st.caption(f"Last drift at row {last_drift_row:,}")
+
+    # Per-detector status pills
+    if detectors:
+        st.markdown("**Detectors (last event)**")
+        cols = st.columns(len(detectors))
+        for col, det in zip(cols, detectors):
+            name = det.get("name", "?")
+            fired = det.get("last_triggered", False)
+            if fired:
+                col.error(f"🔴 {name}")
+            else:
+                col.success(f"🟢 {name}")
