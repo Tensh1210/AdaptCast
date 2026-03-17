@@ -137,7 +137,7 @@ async def model_versions(request: Request) -> ModelVersionsResponse:
             val_rmse = None
         versions.append(
             ModelVersionInfo(
-                version=mv.version,
+                version=str(mv.version),
                 val_rmse=val_rmse,
                 run_id=mv.run_id[:8],
                 is_champion=(mv.version == champion_version),

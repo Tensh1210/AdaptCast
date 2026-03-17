@@ -6,13 +6,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import mlflow
+import numpy as np
 import pandas as pd
 import yaml
+from sklearn.metrics import mean_squared_error
 
 from src.drift.monitor import DriftEvent
 from src.models.baseline import evaluate, train_baseline
 from src.models.online import OnlineForecaster
-from src.models.registry import get_champion_rmse, register_champion
+from src.models.registry import load_champion, register_champion
 
 TARGET_COL = "OT"
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -79,6 +81,7 @@ class DriftRetrainer:
         self._static_val_df = val_df.iloc[-self._val_window:]
         self._buffer: deque[dict] = deque(maxlen=retrain_window)
         self._online: OnlineForecaster | None = None
+        self._champion_model = load_champion(model_name)
 
     def ingest(self, row: dict) -> None:
         """Buffer every incoming stream row. Call this for each row regardless of drift."""
@@ -110,10 +113,18 @@ class DriftRetrainer:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _get_champion_rmse(self) -> float:
-        """Return champion RMSE, or inf if no champion is registered yet."""
-        rmse = get_champion_rmse(self._model_name)
-        return rmse if rmse is not None else float("inf")
+    def _get_champion_rmse(self, val_df: pd.DataFrame) -> float:
+        """Re-evaluate the current champion on the given validation set.
+
+        This ensures a fair comparison: both champion and challenger are
+        measured on the same (potentially drifted) data.
+        """
+        feature_cols = [c for c in val_df.columns if c != TARGET_COL]
+        try:
+            preds = self._champion_model.predict(val_df[feature_cols])
+            return float(np.sqrt(mean_squared_error(val_df[TARGET_COL], preds)))
+        except Exception:
+            return float("inf")
 
     def _get_current_val_df(self) -> pd.DataFrame:
         """Return a rolling validation window aligned to the current data distribution.
@@ -154,7 +165,7 @@ class DriftRetrainer:
             self._online.learn_one(x, y)
 
         challenger_rmse = self._online.evaluate_on_df(val_df)["rmse"]
-        champion_rmse = self._get_champion_rmse()
+        champion_rmse = self._get_champion_rmse(val_df)
         promoted = False
         run_id: str | None = None
 
@@ -164,6 +175,7 @@ class DriftRetrainer:
                 metrics={"val_rmse": challenger_rmse},
             )
             register_champion(run_id=run_id, model_name=self._model_name)
+            self._champion_model = load_champion(self._model_name)
             promoted = True
             print(
                 f"[retrainer] Mode A — PROMOTED online model "
@@ -187,11 +199,10 @@ class DriftRetrainer:
         """Mode B: full LightGBM retrain on the rolling data buffer."""
         if not self._buffer:
             print("[retrainer] Mode B — buffer empty, skipping retrain.")
-            champion_rmse = self._get_champion_rmse()
             return PromotionResult(
                 promoted=False,
                 challenger_rmse=float("inf"),
-                champion_rmse=champion_rmse if champion_rmse != float("inf") else None,
+                champion_rmse=None,
                 mode="full_retrain",
             )
 
@@ -211,11 +222,10 @@ class DriftRetrainer:
 
         if buffer_df.empty:
             print("[retrainer] Mode B — buffer produced empty DataFrame after dropna.")
-            champion_rmse = self._get_champion_rmse()
             return PromotionResult(
                 promoted=False,
                 challenger_rmse=float("inf"),
-                champion_rmse=champion_rmse if champion_rmse != float("inf") else None,
+                champion_rmse=None,
                 mode="full_retrain",
             )
 
@@ -237,11 +247,12 @@ class DriftRetrainer:
         # Retrieve val_rmse logged by train_baseline
         client = mlflow.MlflowClient()
         challenger_rmse = client.get_run(run_id).data.metrics.get("val_rmse", float("inf"))
-        champion_rmse = self._get_champion_rmse()
+        champion_rmse = self._get_champion_rmse(val_df)
         promoted = False
 
         if self.should_promote(challenger_rmse, champion_rmse):
             register_champion(run_id=run_id, model_name=self._model_name)
+            self._champion_model = load_champion(self._model_name)
             promoted = True
             print(
                 f"[retrainer] Mode B — PROMOTED LightGBM retrain "

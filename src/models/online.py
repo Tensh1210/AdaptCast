@@ -133,7 +133,7 @@ class OnlineForecaster:
                 mlflow.log_param("model_type", "HoeffdingAdaptiveTreeRegressor")
                 mlflow.pyfunc.log_model(
                     python_model=RiverModelWrapper(),
-                    artifact_path="model",
+                    name="model",
                     artifacts={"river_model": str(model_path)},
                 )
                 run_id = run.info.run_id
