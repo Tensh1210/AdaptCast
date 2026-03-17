@@ -2,7 +2,7 @@ api:
   host: "0.0.0.0"
   port: 8000
 mlflow:
-  tracking_uri: "http://localhost:5000"
+  tracking_uri: "sqlite:///mlflow.db"
   experiment_name: "driftpilot"
   model_name: "driftpilot-forecaster"
   champion_alias: "champion"

@@ -121,7 +121,7 @@ def train_baseline(
             f"MAE={val_metrics['mae']:.4f} R²={val_metrics['r2']:.4f}"
         )
 
-        mlflow.lightgbm.log_model(model, artifact_path="model")
+        mlflow.lightgbm.log_model(model, name="model")
         run_id = run.info.run_id
 
     print(f"[baseline] MLflow run_id: {run_id}")
